@@ -1,0 +1,2 @@
+set(aml_services_MESSAGE_FILES "")
+set(aml_services_SERVICE_FILES "/home/irlab/Projects/aml_workspace/src/AML/aml_services/srv/PredictState.srv;/home/irlab/Projects/aml_workspace/src/AML/aml_services/srv/PredictAction.srv;/home/irlab/Projects/aml_workspace/src/AML/aml_services/srv/SendPisaHandCmd.srv;/home/irlab/Projects/aml_workspace/src/AML/aml_services/srv/ReadPisaHandCurr.srv")

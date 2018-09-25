@@ -1,0 +1,8 @@
+prefix=/home/irlab/Projects/aml_workspace/install
+
+Name: aml_pisa_hand
+Description: Description of aml_pisa_hand
+Version: 0.0.0
+Cflags: 
+Libs: -L/home/irlab/Projects/aml_workspace/install/lib 
+Requires: 

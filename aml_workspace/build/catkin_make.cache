@@ -1,0 +1,2 @@
+AML/aml:AML/aml_assets/gazebo_files/aml_baxter_gazebo:AML/aml_assets/urdf_descriptions/aml_baxter_description:AML/aml_calib:AML/aml_ctrl:AML/aml_data_collec_utils:AML/aml_demos:AML/aml_dl:AML/aml_drivers/aml_drivers:AML/aml_drivers/aml_pisa_hand:AML/aml_io:AML/aml_lfd:AML/aml_perception:AML/aml_robot:AML/aml_services:AML/aml_visual_tools
+-DCATKIN_DEVEL_PREFIX=/home/irlab/Projects/aml_workspace/devel -DCMAKE_INSTALL_PREFIX=/home/irlab/Projects/aml_workspace/install -G Unix Makefiles

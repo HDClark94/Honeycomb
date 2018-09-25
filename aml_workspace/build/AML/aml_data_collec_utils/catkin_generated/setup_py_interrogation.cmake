@@ -1,0 +1,6 @@
+set(aml_data_collec_utils_SETUP_PY_VERSION "0.0.0")
+set(aml_data_collec_utils_SETUP_PY_SCRIPTS "")
+set(aml_data_collec_utils_SETUP_PY_PACKAGES "aml_data_collec_utils")
+set(aml_data_collec_utils_SETUP_PY_PACKAGE_DIRS "src/aml_data_collec_utils")
+set(aml_data_collec_utils_SETUP_PY_MODULES "")
+set(aml_data_collec_utils_SETUP_PY_MODULE_DIRS "")

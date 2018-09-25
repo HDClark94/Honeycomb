@@ -1,0 +1,6 @@
+set(aml_dl_SETUP_PY_VERSION "0.0.0")
+set(aml_dl_SETUP_PY_SCRIPTS "")
+set(aml_dl_SETUP_PY_PACKAGES "aml_dl;cnn_pose_estimation;mdn")
+set(aml_dl_SETUP_PY_PACKAGE_DIRS "src/aml_dl;src/cnn_pose_estimation;src/mdn")
+set(aml_dl_SETUP_PY_MODULES "")
+set(aml_dl_SETUP_PY_MODULE_DIRS "")

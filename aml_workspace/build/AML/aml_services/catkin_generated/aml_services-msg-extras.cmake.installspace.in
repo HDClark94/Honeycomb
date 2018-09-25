@@ -1,0 +1,2 @@
+set(aml_services_MESSAGE_FILES "")
+set(aml_services_SERVICE_FILES "srv/PredictState.srv;srv/PredictAction.srv;srv/SendPisaHandCmd.srv;srv/ReadPisaHandCurr.srv")

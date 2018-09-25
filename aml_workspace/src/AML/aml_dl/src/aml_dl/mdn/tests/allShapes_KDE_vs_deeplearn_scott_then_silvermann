@@ -1,0 +1,564 @@
+import time
+import tensorflow as tf
+
+#%matplotlib inline
+import matplotlib.pyplot as plt
+import numpy as np
+import tensorflow as tf
+import math
+import json
+import scipy.stats as stats
+from matplotlib.patches import Ellipse
+
+from aml_dl.mdn.model.mdn_push_fwd_model import MDNPushFwdModel
+t0 = time.time()
+
+from config.shape_db import *
+import matplotlib.pyplot as plt
+import tf.transformations as tfm
+
+probe_radius = 0.004745
+
+shape_db = ShapeDB()
+
+NEPOCH = 4
+repeats = 2
+shapepaths = ['/home/irlab/Projects/surface_compare/delrin/rect1_json/data_training_with_shapeBounds_andForce.json','/home/irlab/Projects/surface_compare/delrin/rect2_json/data_training_with_shapeBounds_andForce.json','/home/irlab/Projects/surface_compare/delrin/rect3_json/data_training_with_shapeBounds_andForce.json','/home/irlab/Projects/surface_compare/delrin/tri1_json/data_training_with_shapeBounds_andForce.json','/home/irlab/Projects/surface_compare/delrin/tri2_json/data_training_with_shapeBounds_andForce.json','/home/irlab/Projects/surface_compare/delrin/tri3_json/data_training_with_shapeBounds_andForce.json','/home/irlab/Projects/surface_compare/delrin/ellip1_json/data_training_with_shapeBounds_andForce.json','/home/irlab/Projects/surface_compare/delrin/ellip2_json/data_training_with_shapeBounds_andForce.json','/home/irlab/Projects/surface_compare/delrin/ellip3_json/data_training_with_shapeBounds_andForce.json','/home/irlab/Projects/surface_compare/delrin/hex_json/data_training_with_shapeBounds_andForce.json','/home/irlab/Projects/surface_compare/delrin/butter_json/data_training_with_shapeBounds_andForce.json']
+#shapepaths = ['/home/irlab/Projects/surface_compare/delrin/ellip1_json/data_training_with_shapeBounds_andForce.json','/home/irlab/Projects/surface_compare/delrin/ellip2_json/data_training_with_shapeBounds_andForce.json']
+#shape_ids = ['ellip1', 'ellip2']
+shape_ids = ['rect1', 'rect2', 'rect3', 'tri1', 'tri2', 'tri3', 'ellip1', 'ellip2', 'ellip3', 'hex', 'butter']
+
+shape_avg_pred_err_NN = []
+shape_avg_pred_err_KDE_silvermann = []
+shape_avg_pred_err_KDE_scott = []
+
+shape_counter = 0
+
+for pathname in shapepaths:
+    shape_id = shape_ids[shape_counter]
+    
+    if (shape_counter==10 or shape_counter==6 or shape_counter==7 or shape_counter==8):
+    #if (shape_counter==10 or shape_counter==0 or shape_counter==1 or shape_counter==8):
+        shape_polygon = shape_db.shape_db[shape_id]['shape'][0]
+    else: 
+        shape_polygon = shape_db.shape_db[shape_id]['shape']
+        
+    repeat_err_NN = []
+    repeat_err_KDE_silvermann = []
+    repeat_err_KDE_scott = []
+
+    for m in range(repeats):
+        sess = tf.InteractiveSession()
+    
+        adam_params = {
+            'type': 'adam',
+            'params': {'learning_rate' : 0.0001, 'beta1': 0.9, 'beta2': 0.999, 'epsilon': 1e-08, 'use_locking': False}
+        }
+
+        network_params = {
+            'dim_input': 11, 
+            'dim_output': 3,
+            'n_hidden': 400,
+            'k_mixtures': 400,
+            'batch_size': 25,
+            'write_summary': False,
+            'learning_rate': 0.00005,
+            'load_saved_model': False,
+            'optimiser': adam_params,
+            'device': '/cpu:0',
+            'dropout_prob': 0.8,
+            'weight_multiplier': 1.0, # changed iteratively later on only if halfweightValidation used (for dropout)
+            'weight_reg_coef': 0.001, # change to factor weight size regularization
+            'max_weight_mag': 1000, # set high to turn off weight contraining
+
+        }
+
+        forward_model = MDNPushFwdModel(sess=sess, network_params=network_params)
+        forward_model.init_model()
+        
+        json_filepath = pathname
+        with open(json_filepath) as data_file:    
+                data = json.load(data_file)
+        
+        data = np.array(data)
+    
+        # removes all velocity cases
+        dataNew = []
+        for i in range(len(data)):
+            if (data[i][13] == 10):
+                dataNew.append(data[i])
+        data = dataNew
+        #print np.shape(data)
+    
+        val = 0.00 # proport of dataset 
+        tes = 0.05 # proport of dataset
+        data = np.array(data)
+        val_idx = int(round(val*len(data)))
+        test_idx = int(round(tes*len(data))) + val_idx
+    
+        np.random.shuffle(data)
+        val_data = data[0:val_idx]
+        train_data = data[test_idx:len(data)]
+        test_data = data[val_idx:test_idx]
+    
+        dataX = train_data[:, np.r_[0, 1, 2, 3, 4, 5, 6, 10, 11, 12, 14]] # inputs
+        dataY = train_data[:, [7,8, 9]] # end parameters
+    
+        dataX_val = val_data[:, np.r_[0, 1, 2, 3, 4, 5, 6, 10, 11, 12, 14]] # inputs
+        dataY_val = val_data[:, [7,8, 9]] # end parameters
+
+        dataX_test = test_data[:, np.r_[0, 1, 2, 3, 4, 5, 6, 10, 11, 12, 14]] # inputs
+        dataY_test = test_data[:, [7,8, 9]] # end parameters
+    
+        sess.run(tf.global_variables_initializer())
+        #val_step = 100
+        stoch_sample_size = 50
+    
+        loss = np.zeros(NEPOCH)
+        #val_loss = np.zeros(NEPOCH/val_step)
+
+        with tf.device('/cpu:0'):
+            # Keeping track of loss progress as we train
+            train_step = forward_model._net_ops['train']
+            loss_op  = forward_model._net_ops['loss']
+            bs = forward_model._params['batch_size']
+            val_counter = 0
+            counter = 0
+    
+            for i in range(NEPOCH): 
+            
+                b_start_counter = 0
+                b_end_counter = bs
+            
+                feed_dict = {forward_model._net_ops['x']: dataX[b_start_counter:b_end_counter], forward_model._net_ops['y']: dataY[b_start_counter:b_end_counter]}
+                
+                for j in range(int(len(dataX))/bs):
+                    _, loss[i] = forward_model._sess.run([train_step, loss_op], feed_dict=feed_dict)
+                    print i
+            
+                    b_start_counter += bs
+                    b_end_counter += bs
+                
+                    #shift batch on
+                    feed_dict = {forward_model._net_ops['x']: dataX[b_start_counter:b_end_counter], forward_model._net_ops['y']: dataY[b_start_counter:b_end_counter]}
+        
+                #reshuffle after epoch to avoid same cycle
+                np.random.shuffle(train_data)
+                dataX = train_data[:, np.r_[0, 1, 2, 3, 4, 5, 6, 10, 11, 12, 14]] # inputs
+                dataY = train_data[:, [7,8, 9]] # end parameters
+                
+        feed_dict = {forward_model._net_ops['x']: dataX_test}
+        
+        # average over multiple stochastic models to get averaged
+        with tf.device('/cpu:0'):
+            ccpredictions_mus = []
+    
+            for i in range(stoch_sample_size*10):
+                mus_op = forward_model._net_ops['mu']
+                sigmas_op  = forward_model._net_ops['sigma']
+                pis_op = forward_model._net_ops['pi']
+    
+                out_mus = forward_model._sess.run(mus_op, feed_dict=feed_dict)
+                out_sigmas = forward_model._sess.run(sigmas_op, feed_dict=feed_dict)
+                out_pis = forward_model._sess.run(pis_op, feed_dict=feed_dict)
+    
+                concat_out_pis = np.swapaxes(np.array([out_pis, out_pis, out_pis]),0,1) # make shape same as mus
+                weighted_mus = out_mus*concat_out_pis
+                ccpredictions_mus.append(np.sum(weighted_mus,2).tolist())
+    
+            ccpredictions_mus_mean = np.mean(ccpredictions_mus,0)
+            ccpredictions_sigmas = np.std(ccpredictions_mus,0)
+        
+        sum_avg_err_NN = np.sum(np.mean(np.abs(dataY_test-ccpredictions_mus_mean), axis = 0))
+        
+        if (shape_counter!=6 and shape_counter!=7 and shape_counter!=8):
+        #if (shape_counter> 8):
+            for i in range(12):
+                obj_start = dataX_test[i, [4, 5, 6]]
+                transformed_start = rigidtransform(shape_polygon, obj_start)
+                plottransformed_obj(transformed_start, 'g', 1.0)
+                plottransformed_pusher(dataX_test[i,0], dataX_test[i,1], probe_radius, 'g')
+
+                transformed_end = rigidtransform(shape_polygon, dataY_test[i])
+                plottransformed_obj(transformed_end, 'r', 1.0)
+                plottransformed_pusher(dataX_test[i,2], dataX_test[i,3], probe_radius, 'r')
+
+                pred = ccpredictions_mus_mean[i] ## uncomment to use convex combination
+                pred_sig = ccpredictions_sigmas[i]
+                #pred = predictions[i]
+    
+                xs = np.linspace(pred[0]-pred_sig[0], pred[0]+pred_sig[0], 3)
+                ys = np.linspace(pred[1]-pred_sig[1], pred[1]+pred_sig[1], 3)
+                thetas = np.linspace(pred[2]-pred_sig[2], pred[2]+pred_sig[2], 3)
+    
+                for i in xs:
+                    for j in ys:
+                        for l in thetas:
+                            transformed_pred = rigidtransform(shape_polygon, [i,j,l])
+                            plottransformed_obj(transformed_pred, 'b', 0.2)
+                
+                transformed_pred = rigidtransform(shape_polygon, pred)
+                plottransformed_obj(transformed_pred, 'b', 1)
+                
+                print 'NN'
+                plt.show()            
+        else:
+            for i in range(len(test_data)):
+                obj_startX = dataX_test[i, [4]]
+                obj_startY = dataX_test[i, [5]]
+                obj_startTheta = dataX_test[i, [6]]
+                obj_endX = dataY_test[i, [0]]
+                obj_endY = dataY_test[i, [1]]
+                obj_endTheta = dataY_test[i, [2]]
+    
+                pred = ccpredictions_mus_mean[i] ## uncomment to use convex combination
+                pred_sig = ccpredictions_sigmas[i]
+    
+                plt.figure(figsize=(4, 4))
+    
+                plt.figure(i).add_subplot(111, aspect='equal').add_artist(Ellipse((obj_startX, obj_startY), shape_polygon[0]*2, shape_polygon[1]*2, angle=math.degrees(obj_startTheta), fill=False, color='g'))
+                plottransformed_pusher(dataX_test[i,0], dataX_test[i,1], probe_radius, 'g')
+                plt.figure(i).add_subplot(111, aspect='equal').add_artist(Ellipse((obj_endX, obj_endY), shape_polygon[0]*2, shape_polygon[1]*2, angle=math.degrees(obj_endTheta), fill=False, color='r'))
+                plottransformed_pusher(dataX_test[i,2], dataX_test[i,3], probe_radius, 'r')
+    
+                xs = np.linspace(pred[0]-pred_sig[0], pred[0]+pred_sig[0], 3)
+                ys = np.linspace(pred[1]-pred_sig[1], pred[1]+pred_sig[1], 3)
+                thetas = np.linspace(pred[2]-pred_sig[2], pred[2]+pred_sig[2], 3)
+    
+                for m in xs:
+                    for j in ys:
+                        for l in thetas:
+                            plt.figure(i).add_subplot(111, aspect='equal').add_artist(Ellipse((m, j), shape_polygon[0]*2, shape_polygon[1]*2, angle=math.degrees(l), fill=False, color='b', alpha = 0.1))
+                
+                print 'NN'
+                plt.figure(i).add_subplot(111, aspect='equal').add_artist(Ellipse((pred[0], pred[1]), shape_polygon[0]*2, shape_polygon[1]*2, angle=math.degrees(pred[2]), fill=False, color='b', alpha = 1))
+                plt.axis([obj_startX-0.15, obj_startX+0.15, obj_startY-0.15, obj_startY+0.15])
+                plt.show() 
+
+#----------------------------KDE-silvermann-------------------------------------------------------------------------------------       
+        train_datar = train_data[:, np.r_[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14]]
+        test_datar = test_data[:, np.r_[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14]]
+        
+        kde = stats.kde.gaussian_kde(train_datar.T, bw_method='silverman')
+        o_ex_flat = np.r_[train_datar.T[7,:].min():train_datar.T[7,:].max():5j]
+        o_ey_flat = np.r_[train_datar.T[8,:].min():train_datar.T[8,:].max():5j]
+        o_et_flat = np.r_[train_datar.T[9,:].min():train_datar.T[9,:].max():10j]
+
+        pred = []
+        for i in range(len(test_datar)): #1
+            max_xyt = 0
+            counter_m = 0
+            for m in o_ex_flat:
+                counter_n = 0
+                for n in o_ey_flat:
+                    counter_o = 0
+                    for o in o_et_flat:
+                        temp = kde([[test_datar[i][0]],[test_datar[i][1]], [test_datar[i][2]], [test_datar[i][3]], [test_datar[i][4]], [test_datar[i][5]], [test_datar[i][6]], [m], [n], [o], [test_datar[i][10]], [test_datar[i][11]], [test_datar[i][12]], [test_datar[i][13]]])
+                        if (temp > max_xyt):
+                            max_xyt = temp
+                            max_xyt_coords = (counter_m, counter_n, counter_o)
+                        counter_o += 1
+                    counter_n += 1       
+                counter_m += 1
+            pred.append([o_ex_flat[max_xyt_coords[0]], o_ey_flat[max_xyt_coords[1]], o_et_flat[max_xyt_coords[2]]])
+        sum_avg_err_KDE_silvermann = np.sum(np.mean(np.abs(dataY_test-pred), axis = 0))
+        
+        # calculate sigmas for each prediction
+        pred_sig= np.zeros((len(test_datar), 3))
+        for i in range(len(test_datar)):
+            oex_c = np.zeros(len(o_ex_flat))
+            oey_c = np.zeros(len(o_ey_flat))
+            oet_c = np.zeros(len(o_et_flat))
+            counter = 0
+            for m in o_ex_flat:
+                oex_c[counter] = kde([[test_datar[i][0]], [test_datar[i][1]], [test_datar[i][2]], [test_datar[i][3]],  [test_datar[i][4]], [test_datar[i][5]], [test_datar[i][6]], [m], [o_ey_flat[max_xyt_coords[1]]], [o_et_flat[max_xyt_coords[2]]], [test_datar[i][10]], [test_datar[i][11]], [test_datar[i][12]], [test_datar[i][13]]])
+                counter += 1
+            counter = 0
+            for n in o_ey_flat:
+                oey_c[counter] = kde([[test_datar[i][0]], [test_datar[i][1]], [test_datar[i][2]], [test_datar[i][3]],  [test_datar[i][4]], [test_datar[i][5]], [test_datar[i][6]], [o_ex_flat[max_xyt_coords[0]]], [n], [o_et_flat[max_xyt_coords[2]]], [test_datar[i][10]], [test_datar[i][11]], [test_datar[i][12]], [test_datar[i][13]]])
+                counter += 1
+            counter = 0
+            for o in o_et_flat:
+                oet_c[counter] = kde([[test_datar[i][0]], [test_datar[i][1]], [test_datar[i][2]], [test_datar[i][3]],  [test_datar[i][4]], [test_datar[i][5]], [test_datar[i][6]], [o_ex_flat[max_xyt_coords[0]]], [o_ey_flat[max_xyt_coords[1]]], [o], [test_datar[i][10]], [test_datar[i][11]], [test_datar[i][12]], [test_datar[i][13]]])
+                counter += 1
+
+            #normalize to unity and back calculate sigmas for each prediction dimension
+            oex_c = oex_c/np.sum(oex_c)
+            mu = o_ex_flat.dot(oex_c) 
+            mom2 = np.power(o_ex_flat, 2).dot(oex_c)
+            var  = mom2 - mu**2
+            oex_std = np.sqrt(var)
+            pred_sig[i][0] = oex_std
+
+            oey_c = oey_c/np.sum(oey_c)
+            mu = o_ey_flat.dot(oey_c) 
+            mom2 = np.power(o_ey_flat, 2).dot(oey_c)
+            var  = mom2 - mu**2
+            oey_std = np.sqrt(var)
+            pred_sig[i][1] = oey_std
+    
+            oet_c = oet_c/np.sum(oet_c)
+            mu = o_et_flat.dot(oet_c) 
+            mom2 = np.power(o_et_flat, 2).dot(oet_c)
+            var  = mom2 - mu**2
+            oet_std = np.sqrt(var)
+            pred_sig[i][2] = oet_std
+        
+        if (shape_counter!=6 and shape_counter!=7 and shape_counter!=8):
+        #if (shape_counter> 8):
+        # plot predictions within bounds of 1 standard deviation
+            for i in range(len(test_datar)):
+                obj_start = dataX_test[i, [4, 5, 6]]
+                transformed_start = rigidtransform(shape_polygon, obj_start)
+                plottransformed_obj(transformed_start, 'g', 1.0)
+                plottransformed_pusher(dataX_test[i,0], dataX_test[i,1], probe_radius, 'g')
+    
+                transformed_end = rigidtransform(shape_polygon, dataY_test[i])
+                plottransformed_obj(transformed_end, 'r', 1.0)
+                plottransformed_pusher(dataX_test[i,2], dataX_test[i,3], probe_radius, 'r')
+            
+                xs = np.linspace(pred[i][0]-pred_sig[i][0], pred[i][0]+pred_sig[i][0], 3)
+                ys = np.linspace(pred[i][1]-pred_sig[i][1], pred[i][1]+pred_sig[i][1], 3)
+                thetas = np.linspace(pred[i][2]-pred_sig[i][2], pred[i][2]+pred_sig[i][2], 3)
+            
+                for m in xs:
+                    for n in ys:
+                        for o in thetas:
+                            transformed_pred = rigidtransform(shape_polygon, [m,n,o])
+                            plottransformed_obj(transformed_pred, 'b', 0.2)
+                
+                transformed_pred = rigidtransform(shape_polygon, pred[i])
+                plottransformed_obj(transformed_pred, 'b', 1)
+            
+                print 'KDE_silvermann'
+                plt.show()
+        else:
+            for i in range(len(test_datar)):
+                obj_startX = dataX_test[i, [4]]
+                obj_startY = dataX_test[i, [5]]
+                obj_startTheta = dataX_test[i, [6]]
+                obj_endX = dataY_test[i, [0]]
+                obj_endY = dataY_test[i, [1]]
+                obj_endTheta = dataY_test[i, [2]]
+                
+                #pred = ccpredictions_mus_mean[i] ## uncomment to use convex combination
+                #pred_sig = ccpredictions_sigmas[i]
+    
+                plt.figure(figsize=(4, 4))
+    
+                plt.figure(i).add_subplot(111, aspect='equal').add_artist(Ellipse((obj_startX, obj_startY), shape_polygon[0]*2, shape_polygon[1]*2, angle=math.degrees(obj_startTheta), fill=False, color='g'))
+                plottransformed_pusher(dataX_test[i,0], dataX_test[i,1], probe_radius, 'g')
+                plt.figure(i).add_subplot(111, aspect='equal').add_artist(Ellipse((obj_endX, obj_endY), shape_polygon[0]*2, shape_polygon[1]*2, angle=math.degrees(obj_endTheta), fill=False, color='r'))
+                plottransformed_pusher(dataX_test[i,2], dataX_test[i,3], probe_radius, 'r')
+            
+                xs = np.linspace(pred[i][0]-pred_sig[i][0], pred[i][0]+pred_sig[i][0], 3)
+                ys = np.linspace(pred[i][1]-pred_sig[i][1], pred[i][1]+pred_sig[i][1], 3)
+                thetas = np.linspace(pred[i][2]-pred_sig[i][2], pred[i][2]+pred_sig[i][2], 3)
+            
+                for m in xs:
+                    for j in ys:
+                        for l in thetas:
+                            plt.figure(i).add_subplot(111, aspect='equal').add_artist(Ellipse((m, j), shape_polygon[0]*2, shape_polygon[1]*2, angle=math.degrees(l), fill=False, color='b', alpha = 0.1))
+    
+                print 'KDE_silvermann'    
+                plt.figure(i).add_subplot(111, aspect='equal').add_artist(Ellipse((pred[i][0], pred[i][1]), shape_polygon[0]*2, shape_polygon[1]*2, angle=math.degrees(pred[i][2]), fill=False, color='b', alpha = 1))
+                plt.axis([obj_startX-0.15, obj_startX+0.15, obj_startY-0.15, obj_startY+0.15])
+                plt.show() 
+#--------------------------------------------------------------------------------------------------------------------   
+        repeat_err_KDE_silvermann.append(sum_avg_err_KDE_silvermann)
+    
+#----------------------------KDE-scott-------------------------------------------------------------------------------------       
+        train_datar = train_data[:, np.r_[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14]]
+        test_datar = test_data[:, np.r_[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14]]
+        
+        kde = stats.kde.gaussian_kde(train_datar.T, bw_method='scott')
+        o_ex_flat = np.r_[train_datar.T[7,:].min():train_datar.T[7,:].max():5j]
+        o_ey_flat = np.r_[train_datar.T[8,:].min():train_datar.T[8,:].max():5j]
+        o_et_flat = np.r_[train_datar.T[9,:].min():train_datar.T[9,:].max():10j]
+
+        pred = []
+        for i in range(len(test_datar)): #1
+            max_xyt = 0
+            counter_m = 0
+            for m in o_ex_flat:
+                counter_n = 0
+                for n in o_ey_flat:
+                    counter_o = 0
+                    for o in o_et_flat:
+                        temp = kde([[test_datar[i][0]],[test_datar[i][1]], [test_datar[i][2]], [test_datar[i][3]], [test_datar[i][4]], [test_datar[i][5]], [test_datar[i][6]], [m], [n], [o], [test_datar[i][10]], [test_datar[i][11]], [test_datar[i][12]], [test_datar[i][13]]])
+                        if (temp > max_xyt):
+                            max_xyt = temp
+                            max_xyt_coords = (counter_m, counter_n, counter_o)
+                        counter_o += 1
+                    counter_n += 1       
+                counter_m += 1
+            pred.append([o_ex_flat[max_xyt_coords[0]], o_ey_flat[max_xyt_coords[1]], o_et_flat[max_xyt_coords[2]]])
+        sum_avg_err_KDE_scott = np.sum(np.mean(np.abs(dataY_test-pred), axis = 0))
+        
+        # calculate sigmas for each prediction
+        pred_sig= np.zeros((len(test_datar), 3))
+        for i in range(len(test_datar)):
+            oex_c = np.zeros(len(o_ex_flat))
+            oey_c = np.zeros(len(o_ey_flat))
+            oet_c = np.zeros(len(o_et_flat))
+            counter = 0
+            for m in o_ex_flat:
+                oex_c[counter] = kde([[test_datar[i][0]], [test_datar[i][1]], [test_datar[i][2]], [test_datar[i][3]],  [test_datar[i][4]], [test_datar[i][5]], [test_datar[i][6]], [m], [o_ey_flat[max_xyt_coords[1]]], [o_et_flat[max_xyt_coords[2]]], [test_datar[i][10]], [test_datar[i][11]], [test_datar[i][12]], [test_datar[i][13]]])
+                counter += 1
+            counter = 0
+            for n in o_ey_flat:
+                oey_c[counter] = kde([[test_datar[i][0]], [test_datar[i][1]], [test_datar[i][2]], [test_datar[i][3]],  [test_datar[i][4]], [test_datar[i][5]], [test_datar[i][6]], [o_ex_flat[max_xyt_coords[0]]], [n], [o_et_flat[max_xyt_coords[2]]], [test_datar[i][10]], [test_datar[i][11]], [test_datar[i][12]], [test_datar[i][13]]])
+                counter += 1
+            counter = 0
+            for o in o_et_flat:
+                oet_c[counter] = kde([[test_datar[i][0]], [test_datar[i][1]], [test_datar[i][2]], [test_datar[i][3]],  [test_datar[i][4]], [test_datar[i][5]], [test_datar[i][6]], [o_ex_flat[max_xyt_coords[0]]], [o_ey_flat[max_xyt_coords[1]]], [o], [test_datar[i][10]], [test_datar[i][11]], [test_datar[i][12]], [test_datar[i][13]]])
+                counter += 1
+
+            #normalize to unity and back calculate sigmas for each prediction dimension
+            oex_c = oex_c/np.sum(oex_c)
+            mu = o_ex_flat.dot(oex_c) 
+            mom2 = np.power(o_ex_flat, 2).dot(oex_c)
+            var  = mom2 - mu**2
+            oex_std = np.sqrt(var)
+            pred_sig[i][0] = oex_std
+
+            oey_c = oey_c/np.sum(oey_c)
+            mu = o_ey_flat.dot(oey_c) 
+            mom2 = np.power(o_ey_flat, 2).dot(oey_c)
+            var  = mom2 - mu**2
+            oey_std = np.sqrt(var)
+            pred_sig[i][1] = oey_std
+    
+            oet_c = oet_c/np.sum(oet_c)
+            mu = o_et_flat.dot(oet_c) 
+            mom2 = np.power(o_et_flat, 2).dot(oet_c)
+            var  = mom2 - mu**2
+            oet_std = np.sqrt(var)
+            pred_sig[i][2] = oet_std
+        
+        if (shape_counter!=6 and shape_counter!=7 and shape_counter!=8):
+        #if (shape_counter> 8):
+        # plot predictions within bounds of 1 standard deviation
+            for i in range(len(test_datar)):
+                obj_start = dataX_test[i, [4, 5, 6]]
+                transformed_start = rigidtransform(shape_polygon, obj_start)
+                plottransformed_obj(transformed_start, 'g', 1.0)
+                plottransformed_pusher(dataX_test[i,0], dataX_test[i,1], probe_radius, 'g')
+    
+                transformed_end = rigidtransform(shape_polygon, dataY_test[i])
+                plottransformed_obj(transformed_end, 'r', 1.0)
+                plottransformed_pusher(dataX_test[i,2], dataX_test[i,3], probe_radius, 'r')
+            
+                xs = np.linspace(pred[i][0]-pred_sig[i][0], pred[i][0]+pred_sig[i][0], 3)
+                ys = np.linspace(pred[i][1]-pred_sig[i][1], pred[i][1]+pred_sig[i][1], 3)
+                thetas = np.linspace(pred[i][2]-pred_sig[i][2], pred[i][2]+pred_sig[i][2], 3)
+            
+                for m in xs:
+                    for n in ys:
+                        for o in thetas:
+                            transformed_pred = rigidtransform(shape_polygon, [m,n,o])
+                            plottransformed_obj(transformed_pred, 'b', 0.2)
+                
+                transformed_pred = rigidtransform(shape_polygon, pred[i])
+                plottransformed_obj(transformed_pred, 'b', 1)
+            
+                print 'KDE_scott'
+                plt.show()
+        else:
+            for i in range(len(test_datar)):
+                obj_startX = dataX_test[i, [4]]
+                obj_startY = dataX_test[i, [5]]
+                obj_startTheta = dataX_test[i, [6]]
+                obj_endX = dataY_test[i, [0]]
+                obj_endY = dataY_test[i, [1]]
+                obj_endTheta = dataY_test[i, [2]]
+                
+                #pred = ccpredictions_mus_mean[i] ## uncomment to use convex combination
+                #pred_sig = ccpredictions_sigmas[i]
+    
+                plt.figure(figsize=(4, 4))
+    
+                plt.figure(i).add_subplot(111, aspect='equal').add_artist(Ellipse((obj_startX, obj_startY), shape_polygon[0]*2, shape_polygon[1]*2, angle=math.degrees(obj_startTheta), fill=False, color='g'))
+                plottransformed_pusher(dataX_test[i,0], dataX_test[i,1], probe_radius, 'g')
+                plt.figure(i).add_subplot(111, aspect='equal').add_artist(Ellipse((obj_endX, obj_endY), shape_polygon[0]*2, shape_polygon[1]*2, angle=math.degrees(obj_endTheta), fill=False, color='r'))
+                plottransformed_pusher(dataX_test[i,2], dataX_test[i,3], probe_radius, 'r')
+            
+                xs = np.linspace(pred[i][0]-pred_sig[i][0], pred[i][0]+pred_sig[i][0], 3)
+                ys = np.linspace(pred[i][1]-pred_sig[i][1], pred[i][1]+pred_sig[i][1], 3)
+                thetas = np.linspace(pred[i][2]-pred_sig[i][2], pred[i][2]+pred_sig[i][2], 3)
+            
+                for m in xs:
+                    for j in ys:
+                        for l in thetas:
+                            plt.figure(i).add_subplot(111, aspect='equal').add_artist(Ellipse((m, j), shape_polygon[0]*2, shape_polygon[1]*2, angle=math.degrees(l), fill=False, color='b', alpha = 0.1))
+    
+                print 'KDE_scott'    
+                plt.figure(i).add_subplot(111, aspect='equal').add_artist(Ellipse((pred[i][0], pred[i][1]), shape_polygon[0]*2, shape_polygon[1]*2, angle=math.degrees(pred[i][2]), fill=False, color='b', alpha = 1))
+                plt.axis([obj_startX-0.15, obj_startX+0.15, obj_startY-0.15, obj_startY+0.15])
+                plt.show() 
+#--------------------------------------------------------------------------------------------------------------------   
+        repeat_err_KDE_scott.append(sum_avg_err_KDE_scott)
+    
+        repeat_err_NN.append(sum_avg_err_NN)
+        t1 = time.time()
+
+        total = t1-t0
+        print total/60 #time in minutes
+    
+    shape_avg_pred_err_NN.append(repeat_err_NN)
+    shape_avg_pred_err_KDE_silvermann.append(repeat_err_KDE_silvermann)
+    shape_avg_pred_err_KDE_scott.append(repeat_err_KDE_scott)
+    
+    shape_counter += 1
+    print shape_counter
+
+
+
+shape_avg_pred_err_NN = np.array(shape_avg_pred_err_NN)
+shape_avg_pred_err_KDE_scott = np.array(shape_avg_pred_err_KDE_scott)
+
+meansNN = np.mean(shape_avg_pred_err_NN, axis= 1)
+meansKDE = np.mean(shape_avg_pred_err_KDE_scott, axis= 1)
+
+stdsNN = np.std(shape_avg_pred_err_NN, axis= 1)
+stdsKDE = np.std(shape_avg_pred_err_KDE_scott, axis= 1)
+
+ind = np.arange(len(meansNN))
+fig, ax = plt.subplots()
+width = 0.35
+bar1 = ax.bar(ind, meansNN, width, color='r', yerr=stdsNN)
+bar2 = ax.bar(ind+ width, meansKDE, width, color='b', yerr=stdsKDE)
+
+ax.set_ylabel('Mean Error')
+ax.set_xlabel('Shape')
+ax.set_title('MDN vs KDE (Scott), all shapes')
+ax.set_xticks(ind + width / 2)
+ax.set_xticklabels(('rect1', 'rect2', 'rect3', 'tri1', 'tri2', 'tri3', 'ellip1', 'ellip2', 'ellip3', 'hex', 'butter'))
+
+ax.legend((bar1[0], bar2[0]), ('MDN', 'KDE'))
+
+
+
+
+shape_avg_pred_err_NN = np.array(shape_avg_pred_err_NN)
+shape_avg_pred_err_KDE_silvermann = np.array(shape_avg_pred_err_KDE_silvermann)
+
+meansNN = np.mean(shape_avg_pred_err_NN, axis= 1)
+meansKDE = np.mean(shape_avg_pred_err_KDE_silvermann, axis= 1)
+
+stdsNN = np.std(shape_avg_pred_err_NN, axis= 1)
+stdsKDE = np.std(shape_avg_pred_err_KDE_silvermann, axis= 1)
+
+ind = np.arange(len(meansNN))
+fig, ax = plt.subplots()
+width = 0.35
+bar1 = ax.bar(ind, meansNN, width, color='r', yerr=stdsNN)
+bar2 = ax.bar(ind+ width, meansKDE, width, color='b', yerr=stdsKDE)
+
+ax.set_ylabel('Mean Error')
+ax.set_xlabel('Shape')
+ax.set_title('MDN vs KDE (Silvermann), all shapes')
+ax.set_xticks(ind + width / 2)
+ax.set_xticklabels(('rect1', 'rect2', 'rect3', 'tri1', 'tri2', 'tri3', 'ellip1', 'ellip2', 'ellip3', 'hex', 'butter'))
+
+ax.legend((bar1[0], bar2[0]), ('MDN', 'KDE'))
