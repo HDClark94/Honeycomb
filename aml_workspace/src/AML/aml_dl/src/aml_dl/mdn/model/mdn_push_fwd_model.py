@@ -58,6 +58,63 @@ class MDNPushFwdModel(object):
             if self._params['load_saved_model']:
                 self.load_model()
 
+
+    def train_net(self, epochs):
+        with tf.device(self._device):
+            self._sess.run(tf.global_variables_initializer())
+        
+        loss = np.zeros(epochs)
+        
+        feed_dict, _ = self.get_data()
+
+        if self._tf_sumry_wrtr is not None:
+
+            for i in range(epochs):
+
+                print "Starting epoch \t", i
+                round_complete = False
+
+                while not round_complete:
+
+                    if self._params['batch_params'] is not None:
+                        feed_dict, round_complete = self.get_data()
+                    else:
+                        #this is to take care of the case when we are not doing batch training.
+                        round_complete = True
+
+                    if round_complete:
+                        print "Completed round"
+    
+                    if i % 100 == 99:  # Record execution stats
+                        run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+                        run_metadata = tf.RunMetadata()
+                        summary, loss[i] = self._sess.run(fetches=[self._tf_sumry_wrtr._merged, self._net_ops['train_step']],
+                                                    feed_dict=feed_dict,
+                                                    options=run_options,
+                                                    run_metadata=run_metadata)
+                        
+                        self._tf_sumry_wrtr.add_run_metadata(metadata=run_metadata, itr=i)
+                        self._tf_sumry_wrtr.add_summary(summary=summary, itr=i)
+                        print('Adding run metadata for', i)
+                    else:  # Record a summary
+                        summary, loss[i] = self._sess.run(fetches=[self._tf_sumry_wrtr._merged, self._net_ops['train_step']], 
+                                                    feed_dict=feed_dict)
+                        self._tf_sumry_wrtr.add_summary(summary=summary, itr=i)
+           
+            self._tf_sumry_wrtr.close_writer()
+
+        else:
+            with tf.device(self._device):
+                # Keeping track of loss progress as we train
+                train_step = self._net_ops['train_step']
+                loss_op  = self._net_ops['cost']
+
+                for i in range(epochs):
+                  _, loss[i] = self._sess.run([train_step, loss_op], feed_dict=feed_dict)
+  
+        return loss
+
+
     def configure_data(self, data_x, data_y, batch_creator):
         self._data_x = data_x
         self._data_y = data_y
