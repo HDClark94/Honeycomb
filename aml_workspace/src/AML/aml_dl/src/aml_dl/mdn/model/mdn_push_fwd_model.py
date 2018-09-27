@@ -1,24 +1,19 @@
 import os
 import numpy as np
 import tensorflow as tf
+from sklearn.utils import shuffle
 from aml_io.tf_io import load_tf_check_point
 from tf_mdn_model import MixtureDensityNetwork
-from aml_dl.utilities.tf_summary_writer import TfSummaryWriter
 
 class MDNPushFwdModel(object):
 
     def __init__(self, sess, network_params):
 
         self._sess = sess
-
         self._params = network_params
-
         self._device = self._params['device']
-
         self._tf_sumry_wrtr = None
-
         self._optimiser = network_params['optimiser']
-
         self._data_configured = False
 
         if network_params['write_summary']:
@@ -42,12 +37,9 @@ class MDNPushFwdModel(object):
 
             self._mdn = MixtureDensityNetwork(network_params,
                                               tf_sumry_wrtr = self._tf_sumry_wrtr)
-
             self._mdn._init_model()
             self._net_ops = self._mdn._ops
-
             self._init_op = tf.global_variables_initializer()
-
             self._saver = tf.train.Saver()
 
     def init_model(self):
@@ -59,60 +51,99 @@ class MDNPushFwdModel(object):
                 self.load_model()
 
 
-    def train_net(self, epochs):
+    #trains a network specified in self (prenormalized)
+    def train_net(self, training_params):
+
+        train_step = self._net_ops['train']
+        loss_op  = self._net_ops['loss']
+
+        epochs = training_params['epochs']
+        val_step = training_params['val_step']
+        stoch_samples = training_params['stoch_samples']
+        minibatch = training_params['minibatch']
+        train_x = training_params['train_x']
+        train_y = training_params['train_y']
+        val_x = training_params['val_x']
+        val_y = training_params['val_y']
+
         with tf.device(self._device):
             self._sess.run(tf.global_variables_initializer())
         
-        loss = np.zeros(epochs)
-        
-        feed_dict, _ = self.get_data()
-
-        if self._tf_sumry_wrtr is not None:
+            loss = np.zeros(epochs)
+            val_loss = np.zeros(int(epochs)/val_step)
+            val_counter = 0 
+            #feed_dict, _ = self.get_data()
 
             for i in range(epochs):
+                if (i%val_step == 0): #validation plus training
+                    print "Starting epoch \t", i
 
+                    #shuffle x and y in unison for minibatch permutations
+                    train_x, train_y = shuffle(train_x, train_y)
+                    
+                    # counters scroll through dataset with width = minibatch
+                    b_start_counter = 0 
+                    b_end_counter = minibatch
+
+                    # first minibatch
+                    feed_dict = {self._net_ops['x']: train_x[0:minibatch], self._net_ops['y']: train_y[0:minibatch]}
+                    feed_dict_val = {self._net_ops['x']: val_x[0:minibatch], self._net_ops['y']: val_y[0:minibatch]}
+                    
+                    # training loop
+                    for j in range(int(len(train_x))/minibatch):
+                        _, loss[i] = self._sess.run([train_step, loss_op], feed_dict=feed_dict)
+            
+                        b_start_counter += minibatch
+                        b_end_counter += minibatch
+                    
+                        #shift minibatch on
+                        feed_dict = {self._net_ops['x']: train_x[b_start_counter:b_end_counter], self._net_ops['y']: train_y[b_start_counter:b_end_counter]}
+        
+                # calculate validation loss (with stochastic samples averages)
+                val_sum = 0
+                for j in range(int(len(val_x))):
+                    stoch_sum = 0
+                    feed_dict_val = {self._net_ops['x']: [val_x[j]], self._net_ops['y']: [val_y[j]]}
+                    for l in range(stoch_samples):
+                        stoch_sum += self._sess.run(loss_op, feed_dict=feed_dict_val)
+                    val_sum += stoch_sum/stoch_samples
+                val_loss[val_counter] = val_sum/len(val_x)
+                val_counter += 1
+                
+            else: # just training
                 print "Starting epoch \t", i
-                round_complete = False
+                
+                #shuffle x and y in unison for minibatch permutations
+                train_x, train_y = shuffle(train_x, train_y)
+                    
+                # counters scroll through dataset with width = minibatch
+                b_start_counter = 0 
+                b_end_counter = minibatch
 
-                while not round_complete:
+                # first minibatch
+                feed_dict = {self._net_ops['x']: train_x[0:minibatch], self._net_ops['y']: train_y[0:minibatch]}
+                feed_dict_val = {self._net_ops['x']: val_x[0:minibatch], self._net_ops['y']: val_y[0:minibatch]}
+                    
+                # training loop
+                for j in range(int(len(train_x))/minibatch):
+                    _, loss[i] = self._sess.run([train_step, loss_op], feed_dict=feed_dict)
+            
+                    b_start_counter += minibatch
+                    b_end_counter += minibatch
+                    
+                    #shift minibatch on
+                    feed_dict = {self._net_ops['x']: train_x[b_start_counter:b_end_counter], self._net_ops['y']: train_y[b_start_counter:b_end_counter]}
+            
+            # plotting updates
+            if (i%val_step == 0) and (i>1):
+                plt.plot(range(0,i), loss[0:i], label = "loss")
+                plt.plot(range(0,i+1,val_step), val_loss[0:val_counter], label = "validation loss")
+                plt.xlabel('Epoch')
+                plt.ylabel('Error')
+                plt.legend(handles=[blue_line])
+                plt.show()
 
-                    if self._params['batch_params'] is not None:
-                        feed_dict, round_complete = self.get_data()
-                    else:
-                        #this is to take care of the case when we are not doing batch training.
-                        round_complete = True
-
-                    if round_complete:
-                        print "Completed round"
-    
-                    if i % 100 == 99:  # Record execution stats
-                        run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-                        run_metadata = tf.RunMetadata()
-                        summary, loss[i] = self._sess.run(fetches=[self._tf_sumry_wrtr._merged, self._net_ops['train_step']],
-                                                    feed_dict=feed_dict,
-                                                    options=run_options,
-                                                    run_metadata=run_metadata)
-                        
-                        self._tf_sumry_wrtr.add_run_metadata(metadata=run_metadata, itr=i)
-                        self._tf_sumry_wrtr.add_summary(summary=summary, itr=i)
-                        print('Adding run metadata for', i)
-                    else:  # Record a summary
-                        summary, loss[i] = self._sess.run(fetches=[self._tf_sumry_wrtr._merged, self._net_ops['train_step']], 
-                                                    feed_dict=feed_dict)
-                        self._tf_sumry_wrtr.add_summary(summary=summary, itr=i)
-           
-            self._tf_sumry_wrtr.close_writer()
-
-        else:
-            with tf.device(self._device):
-                # Keeping track of loss progress as we train
-                train_step = self._net_ops['train_step']
-                loss_op  = self._net_ops['cost']
-
-                for i in range(epochs):
-                  _, loss[i] = self._sess.run([train_step, loss_op], feed_dict=feed_dict)
-  
-        return loss
+        return loss, val_loss
 
 
     def configure_data(self, data_x, data_y, batch_creator):
@@ -212,7 +243,7 @@ class MDNPushFwdModel(object):
         else:
             with tf.device(self._device):
                 # Keeping track of loss progress as we train
-                train_step = self._net_ops['train_step']
+                train_step = self._net_ops['train']
                 loss_op  = self._net_ops['cost']
 
                 for i in range(epochs):
