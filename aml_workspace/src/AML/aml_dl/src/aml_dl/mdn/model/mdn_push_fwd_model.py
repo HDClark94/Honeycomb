@@ -1,8 +1,10 @@
 import os
 import numpy as np
 import tensorflow as tf
+import matplotlib.pyplot as plt
 from sklearn.utils import shuffle
 from aml_io.tf_io import load_tf_check_point
+import time
 from tf_mdn_model import MixtureDensityNetwork
 
 class MDNPushFwdModel(object):
@@ -54,6 +56,7 @@ class MDNPushFwdModel(object):
     #trains a network specified in self (prenormalized)
     def train_net(self, training_params):
 
+        t0 = time.time()
         train_step = self._net_ops['train']
         loss_op  = self._net_ops['loss']
 
@@ -99,49 +102,50 @@ class MDNPushFwdModel(object):
                         #shift minibatch on
                         feed_dict = {self._net_ops['x']: train_x[b_start_counter:b_end_counter], self._net_ops['y']: train_y[b_start_counter:b_end_counter]}
         
-                # calculate validation loss (with stochastic samples averages)
-                val_sum = 0
-                for j in range(int(len(val_x))):
-                    stoch_sum = 0
-                    feed_dict_val = {self._net_ops['x']: [val_x[j]], self._net_ops['y']: [val_y[j]]}
-                    for l in range(stoch_samples):
-                        stoch_sum += self._sess.run(loss_op, feed_dict=feed_dict_val)
-                    val_sum += stoch_sum/stoch_samples
-                val_loss[val_counter] = val_sum/len(val_x)
-                val_counter += 1
+                    # calculate validation loss (with stochastic samples averages)
+                    val_sum = 0
+                    for j in range(int(len(val_x))):
+                        stoch_sum = 0
+                        feed_dict_val = {self._net_ops['x']: [val_x[j]], self._net_ops['y']: [val_y[j]]}
+                        for l in range(stoch_samples):
+                            stoch_sum += self._sess.run(loss_op, feed_dict=feed_dict_val)
+                        val_sum += stoch_sum/stoch_samples
+                    val_loss[val_counter] = val_sum/len(val_x)
+                    val_counter += 1
                 
-            else: # just training
-                print "Starting epoch \t", i
+                else: # just training
+                    print "Starting epoch \t", i
                 
-                #shuffle x and y in unison for minibatch permutations
-                train_x, train_y = shuffle(train_x, train_y)
+                    #shuffle x and y in unison for minibatch permutations
+                    train_x, train_y = shuffle(train_x, train_y)
                     
-                # counters scroll through dataset with width = minibatch
-                b_start_counter = 0 
-                b_end_counter = minibatch
+                    # counters scroll through dataset with width = minibatch
+                    b_start_counter = 0 
+                    b_end_counter = minibatch
 
-                # first minibatch
-                feed_dict = {self._net_ops['x']: train_x[0:minibatch], self._net_ops['y']: train_y[0:minibatch]}
-                feed_dict_val = {self._net_ops['x']: val_x[0:minibatch], self._net_ops['y']: val_y[0:minibatch]}
+                    # first minibatch
+                    feed_dict = {self._net_ops['x']: train_x[0:minibatch], self._net_ops['y']: train_y[0:minibatch]}
+                    feed_dict_val = {self._net_ops['x']: val_x[0:minibatch], self._net_ops['y']: val_y[0:minibatch]}
                     
-                # training loop
-                for j in range(int(len(train_x))/minibatch):
-                    _, loss[i] = self._sess.run([train_step, loss_op], feed_dict=feed_dict)
+                    # training loop
+                    for j in range(int(len(train_x))/minibatch):
+                        _, loss[i] = self._sess.run([train_step, loss_op], feed_dict=feed_dict)
             
-                    b_start_counter += minibatch
-                    b_end_counter += minibatch
+                        b_start_counter += minibatch
+                        b_end_counter += minibatch
                     
-                    #shift minibatch on
-                    feed_dict = {self._net_ops['x']: train_x[b_start_counter:b_end_counter], self._net_ops['y']: train_y[b_start_counter:b_end_counter]}
+                        #shift minibatch on
+                        feed_dict = {self._net_ops['x']: train_x[b_start_counter:b_end_counter], self._net_ops['y']: train_y[b_start_counter:b_end_counter]}
             
-            # plotting updates
-            if (i%val_step == 0) and (i>1):
-                plt.plot(range(0,i), loss[0:i], label = "loss")
-                plt.plot(range(0,i+1,val_step), val_loss[0:val_counter], label = "validation loss")
-                plt.xlabel('Epoch')
-                plt.ylabel('Error')
-                plt.legend(handles=[blue_line])
-                plt.show()
+                # plotting updates
+                if (i%val_step == 0) and (i>1):
+                    plt.plot(range(0,i), loss[0:i], label = "loss")
+                    plt.plot(range(0,i+1,val_step), val_loss[0:val_counter], label = "validation loss")
+                    plt.xlabel('Epoch')
+                    plt.ylabel('Error')
+                    plt.legend()
+                    plt.title(str(time.time()-t0/60) + ' minutes')
+                    plt.show()
 
         return loss, val_loss
 
