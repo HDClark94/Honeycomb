@@ -144,7 +144,7 @@ class MDNPushFwdModel(object):
                     plt.xlabel('Epoch')
                     plt.ylabel('Error')
                     plt.legend()
-                    plt.title(str(time.time()-t0/60) + ' minutes')
+                    plt.title(str((time.time()-t0)/60) + ' minutes')
                     plt.show()
 
         return loss, val_loss
